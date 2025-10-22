@@ -145,11 +145,24 @@ def main() -> None:
     
     def start_http_server():
         handler = http.server.SimpleHTTPRequestHandler
-        with socketserver.TCPServer(("", port), handler) as httpd:
+        with socketserver.TCPServer(("0.0.0.0", port), handler) as httpd:
+            print(f"HTTP server started on port {port}")
             httpd.serve_forever()
     
     # Start HTTP server in background
     threading.Thread(target=start_http_server, daemon=True).start()
+    
+    # Keep-alive ping every 10 minutes to prevent sleep
+    def keep_alive():
+        import requests
+        while True:
+            time.sleep(600)  # 10 minutes
+            try:
+                requests.get(f"http://localhost:{port}", timeout=5)
+            except:
+                pass
+    
+    threading.Thread(target=keep_alive, daemon=True).start()
     
     # Run Telegram bot
     app.run_polling(close_loop=False)
