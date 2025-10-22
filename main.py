@@ -181,8 +181,14 @@ def main() -> None:
     
     threading.Thread(target=keep_alive, daemon=True).start()
     
-    # Run Telegram bot
-    app.run_polling(close_loop=False)
+    # Run Telegram bot with error handling
+    try:
+        app.run_polling(close_loop=False)
+    except Exception as e:
+        logger.error(f"Bot error: {e}")
+        # Restart after 30 seconds
+        time.sleep(30)
+        app.run_polling(close_loop=False)
 
 
 if __name__ == "__main__":
