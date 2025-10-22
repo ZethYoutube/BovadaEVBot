@@ -162,25 +162,34 @@ class EVEngine:
         ev = (fair_prob * profit_per_unit) - (1.0 - fair_prob)
         return ev
 
-    def get_top_bets(self, games_data: List[Dict[str, Any]], n: int = 10, min_edge: float = 0.02) -> List[Dict[str, Any]]:
+    def get_top_bets(
+        self,
+        games_data: List[Dict[str, Any]],
+        n: int = 10,
+        min_edge: float = 0.02,
+        bookmaker_aliases: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
         """Return list of top bets using selection with fallback logic.
         
         Args:
             games_data: List of game dictionaries from fetch_odds().
             n: Maximum number of bets to return.
             min_edge: Minimum edge required (e.g., 0.02 for 2%).
+            bookmaker_aliases: Optional list of lowercase substrings to match bookmaker title.
             
         Returns:
             List of bet dictionaries sorted by EV (highest first).
         """
         candidates: List[Dict[str, Any]] = []
+        if not bookmaker_aliases:
+            bookmaker_aliases = ["bovada", "bodog"]
         
         for game in games_data:
             fair_lines = self.calc_fair_line(game)
             
             for bookmaker in game.get("bookmakers", []):
-                name = bookmaker.get("title", "").lower()
-                if not any(alias in name for alias in ("bovada", "bodog")):
+                name = (bookmaker.get("title", "") or "").lower()
+                if not any(alias in name for alias in bookmaker_aliases):
                     continue
                 for market in bookmaker.get("markets", []):
                     mkey = market.get("key")

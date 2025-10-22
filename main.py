@@ -110,6 +110,9 @@ def build_application(token: str, engine: EVEngine, results: ResultsTracker, ban
                 "basketball_nba,americanfootball_nfl,baseball_mlb,soccer_epl,soccer_uefa_champs_league",
             )
             sports = [s.strip() for s in sports_csv.split(",") if s.strip()]
+
+            books_csv = os.getenv("BOOKS", "bovada,bodog")
+            books = [b.strip().lower() for b in books_csv.split(",") if b.strip()]
             
             for sport in sports:
                 try:
@@ -129,11 +132,11 @@ def build_application(token: str, engine: EVEngine, results: ResultsTracker, ban
                 
             min_edge = float(os.getenv("MIN_EDGE", "0.1"))
             top_n = int(os.getenv("TOP_BETS", "3"))
-            top_bets = engine.get_top_bets(all_games, n=top_n, min_edge=min_edge)
+            top_bets = engine.get_top_bets(all_games, n=top_n, min_edge=min_edge, bookmaker_aliases=books)
 
             # cache last selection for placement
             context.application.bot_data["last_top_bets"] = top_bets
-            logger.info(f"Computed {len(top_bets)} candidate bets (min_edge={min_edge}, top_n={top_n})")
+            logger.info(f"Computed {len(top_bets)} candidate bets (min_edge={min_edge}, top_n={top_n}, books={books})")
             
             if not top_bets:
                 await update.message.reply_text("❌ No EV opportunities found. Try again later.")
@@ -367,7 +370,7 @@ def main() -> None:
 
             todays_games = [g for g in all_games if is_today(g)]
 
-            top_bets = engine.get_top_bets(todays_games, n=top_n, min_edge=min_edge)
+            top_bets = engine.get_top_bets(todays_games, n=top_n, min_edge=min_edge, bookmaker_aliases=[b.strip().lower() for b in os.getenv("BOOKS", "bovada,bodog").split(",") if b.strip()])
 
             if not top_bets:
                 msg = "No odds available from provider right now. Try again later."
