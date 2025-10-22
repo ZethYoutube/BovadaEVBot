@@ -92,7 +92,7 @@ def build_application(token: str, engine: EVEngine, results: ResultsTracker, ban
             # Try multiple sports
             all_games = []
             sports = ["basketball_nba", "americanfootball_nfl", "baseball_mlb", "icehockey_nhl", 
-                     "soccer_epl", "soccer_uefa_champs_league", "tennis_atp"]
+                     "soccer_epl", "soccer_uefa_champs_league"]
             
             for sport in sports:
                 try:
@@ -129,7 +129,7 @@ def build_application(token: str, engine: EVEngine, results: ResultsTracker, ban
             # Test API connection with all sports
             all_games = []
             sports = ["basketball_nba", "americanfootball_nfl", "baseball_mlb", "icehockey_nhl", 
-                     "soccer_epl", "soccer_uefa_champs_league", "tennis_atp"]
+                     "soccer_epl", "soccer_uefa_champs_league"]
             
             sport_counts = {}
             for sport in sports:
