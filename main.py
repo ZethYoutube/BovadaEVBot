@@ -130,9 +130,12 @@ def build_application(token: str, engine: EVEngine, results: ResultsTracker, ban
             min_edge = float(os.getenv("MIN_EDGE", "0.1"))
             top_n = int(os.getenv("TOP_BETS", "3"))
             top_bets = engine.get_top_bets(all_games, n=top_n, min_edge=min_edge)
+
+            # cache last selection for placement
+            context.application.bot_data["last_top_bets"] = top_bets
+            logger.info(f"Computed {len(top_bets)} candidate bets (min_edge={min_edge}, top_n={top_n})")
             
             if not top_bets:
-                # With fallback logic, still can be empty if no odds parsed
                 await update.message.reply_text("❌ No EV opportunities found. Try again later.")
                 return
                 
@@ -231,8 +234,64 @@ def build_application(token: str, engine: EVEngine, results: ResultsTracker, ban
             logger.error(f"Debug command failed: {e}")
             await update.message.reply_text(f"❌ Debug failed: {str(e)}")
 
+    async def cmd_take_ev(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Record/"take" the current EV picks (uses last /testev selection)."""
+        try:
+            min_edge = float(os.getenv("MIN_EDGE", "0.1"))
+            top_n = int(os.getenv("TOP_BETS", "3"))
+
+            bets: List[Dict[str, Any]] = context.application.bot_data.get("last_top_bets") or []
+            if not bets:
+                # If no cached bets, compute fresh similar to /testev
+                all_games: List[Dict[str, Any]] = []
+                sports_csv = os.getenv(
+                    "SPORTS",
+                    "basketball_nba,americanfootball_nfl,baseball_mlb,soccer_epl,soccer_uefa_champs_league",
+                )
+                sports = [s.strip() for s in sports_csv.split(",") if s.strip()]
+                for sport in sports:
+                    try:
+                        games = engine.fetch_odds(sport=sport)
+                        if games:
+                            all_games.extend(games)
+                    except Exception:
+                        continue
+                bets = engine.get_top_bets(all_games, n=top_n, min_edge=min_edge)
+
+            if not bets:
+                await update.message.reply_text("❌ No EV picks to take right now.")
+                return
+
+            # Limit to top_n
+            bets = bets[:top_n]
+
+            confirmations: List[str] = []
+            for i, bet in enumerate(bets, start=1):
+                stake = bankroll.recommend_stake(bet.get("ev", 0.0), bet.get("ev", 0.0))
+                record = {
+                    "game": bet.get("game"),
+                    "market": bet.get("market"),
+                    "outcome": bet.get("outcome"),
+                    "odds": bet.get("bovada_odds"),
+                    "fair_odds": bet.get("fair_odds"),
+                    "ev": bet.get("ev"),
+                    "stake": stake,
+                    "status": "pending",
+                }
+                results.record_bet(record)
+                mark = "⚠️ " if bet.get("fallback") else ""
+                confirmations.append(
+                    f"{mark}{i}. {bet.get('game')} | {bet.get('market')} | {bet.get('outcome')} — Stake: {stake}"
+                )
+
+            logger.info(f"Recorded {len(bets)} bets via /takeev")
+            await update.message.reply_text("📝 Bets recorded:\n\n" + "\n".join(confirmations))
+        except Exception as e:
+            logger.error(f"/takeev failed: {e}")
+            await update.message.reply_text(f"❌ Take EV failed: {str(e)}")
+
     async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await update.message.reply_text("BovadaEVBot is running. Use /bankroll, /stats, /settings, /testev, /status, /debug")
+        await update.message.reply_text("BovadaEVBot is running. Use /bankroll, /stats, /settings, /testev, /status, /debug, /takeev")
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("bankroll", cmd_bankroll))
@@ -241,6 +300,7 @@ def build_application(token: str, engine: EVEngine, results: ResultsTracker, ban
     app.add_handler(CommandHandler("testev", cmd_test_ev))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("debug", cmd_debug))
+    app.add_handler(CommandHandler("takeev", cmd_take_ev))
 
     return app
 
@@ -276,7 +336,6 @@ def main() -> None:
 
             # Fetch from all sports
             all_games = []
-            
             for sport in sports:
                 try:
                     games = engine.fetch_odds(sport=sport)
