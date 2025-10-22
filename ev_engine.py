@@ -85,19 +85,16 @@ class EVEngine:
         fair_lines = {}
         
         for market_type in ["h2h", "spreads", "totals"]:
-            if market_type not in game_data:
-                continue
-                
-            market_data = game_data[market_type]
-            if not market_data:
-                continue
-                
-            # Collect all odds for this market
-            all_odds = []
+            # Collect all odds for this market from bookmakers[].markets[].outcomes[]
+            all_odds: List[float] = []
             for bookmaker in game_data.get("bookmakers", []):
-                if market_type in bookmaker:
-                    for outcome in bookmaker[market_type]:
-                        all_odds.append(outcome.get("price", 0))
+                for market in bookmaker.get("markets", []):
+                    if market.get("key") != market_type:
+                        continue
+                    for outcome in market.get("outcomes", []):
+                        price = outcome.get("price")
+                        if isinstance(price, (int, float)):
+                            all_odds.append(float(price))
             
             if not all_odds:
                 continue
@@ -162,42 +159,41 @@ class EVEngine:
         for game in games_data:
             fair_lines = self.calc_fair_line(game)
             
-            # Check Bovada odds against fair lines
+            # Check Bovada/Bodog odds against fair lines using markets schema
             for bookmaker in game.get("bookmakers", []):
                 name = bookmaker.get("title", "").lower()
-                # Accept Bovada and regional brand alias Bodog
                 if not any(alias in name for alias in ("bovada", "bodog")):
                     continue
-                    
-                for market_type in ["h2h", "spreads", "totals"]:
-                    if market_type not in bookmaker or market_type not in fair_lines:
-                        continue
-                        
-                    for outcome in bookmaker[market_type]:
-                        bovada_odds = outcome.get("price", 0)
-                        if bovada_odds == 0:
-                            continue
-                            
-                        fair_data = fair_lines[market_type]
-                        if market_type == "h2h":
-                            fair_odds = fair_data.get("fair_odds", 0)
-                        else:
-                            fair_odds = fair_data.get("fair_odds", 0)
-                            
-                        if fair_odds == 0:
-                            continue
-                            
-                        ev = self.calc_ev(bovada_odds, fair_odds)
 
+                for market in bookmaker.get("markets", []):
+                    mkey = market.get("key")
+                    if mkey not in ["h2h", "spreads", "totals"]:
+                        continue
+                    if mkey not in fair_lines:
+                        continue
+
+                    for outcome in market.get("outcomes", []):
+                        bovada_odds = outcome.get("price", 0)
+                        if not isinstance(bovada_odds, (int, float)) or bovada_odds == 0:
+                            continue
+
+                        fair_data = fair_lines[mkey]
+                        fair_odds = fair_data.get("fair_odds", 0)
+                        if not isinstance(fair_odds, (int, float)) or fair_odds == 0:
+                            continue
+
+                        ev = self.calc_ev(float(bovada_odds), float(fair_odds))
+
+                        outcome_name = outcome.get("name") or outcome.get("description", "")
                         bet_info = {
                             "game": game.get("home_team", "") + " vs " + game.get("away_team", ""),
-                            "market": market_type,
-                            "outcome": outcome.get("description", ""),
-                            "bovada_odds": bovada_odds,
-                            "fair_odds": fair_odds,
+                            "market": mkey,
+                            "outcome": outcome_name,
+                            "bovada_odds": float(bovada_odds),
+                            "fair_odds": float(fair_odds),
                             "ev": ev,
                             "edge_pct": ev * 100,
-                            "desc": f"{market_type} | {outcome.get('description', '')}",
+                            "desc": f"{mkey} | {outcome_name}",
                         }
                         candidates.append(bet_info)
 
