@@ -112,26 +112,23 @@ class EVEngine:
     def calc_ev(self, bovada_odds: float, fair_odds: float) -> float:
         """Compute expected value for Bovada odds vs fair line.
         
-        Args:
-            bovada_odds: Bovada's odds in American format.
-            fair_odds: Fair market odds in American format.
-            
-        Returns:
-            Expected value as a decimal (e.g., 0.05 for 5% edge).
+        EV is computed per unit stake (e.g., $1):
+        - fair_prob = implied probability from fair_odds
+        - profit_per_unit = american odds profit for a $1 stake
+        - EV = fair_prob * profit_per_unit - (1 - fair_prob) * 1
         """
+        if not isinstance(bovada_odds, (int, float)) or not isinstance(fair_odds, (int, float)):
+            return 0.0
         if bovada_odds == 0 or fair_odds == 0:
             return 0.0
-            
-        bovada_prob = self._american_to_prob(bovada_odds)
+
         fair_prob = self._american_to_prob(fair_odds)
-        
-        if fair_prob == 0:
+        if fair_prob <= 0 or fair_prob >= 1:
             return 0.0
-            
-        # EV = (probability * payout) - (1 - probability)
-        payout = bovada_odds if bovada_odds > 0 else (100 / abs(bovada_odds)) * 100
-        ev = (bovada_prob * payout / 100) - (1 - bovada_prob)
-        
+
+        # Profit for $1 stake at American odds
+        profit_per_unit = (bovada_odds / 100.0) if bovada_odds > 0 else (100.0 / abs(bovada_odds))
+        ev = (fair_prob * profit_per_unit) - (1.0 - fair_prob)
         return ev
 
     def get_top_bets(self, games_data: List[Dict[str, Any]], n: int = 10, min_edge: float = 0.02) -> List[Dict[str, Any]]:
