@@ -7,6 +7,16 @@ Responsibilities:
 - Schedule a daily job to compute and send top EV bets
 - Initialize Telegram bot with basic commands: /bankroll, /stats, /settings
 - Coordinate bankroll and results tracking
+
+Config (env, with defaults):
+- MIN_EDGE (float): minimum EV threshold for auto-picks. Default 0.1 (10%).
+- TOP_BETS (int): number of bets to send daily. Default 3.
+- SPORTS (csv): sports to scan, e.g.,
+  "basketball_nba,americanfootball_nfl,baseball_mlb,soccer_epl,soccer_uefa_champs_league".
+
+Fallback behavior:
+- If fewer than TOP_BETS have EV >= MIN_EDGE, remaining slots are filled with next best EVs
+  and tagged as fallback in the Telegram message.
 """
 
 from __future__ import annotations
@@ -34,15 +44,18 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def format_bets_message(bets: List[Dict[str, Any]]) -> str:
+def format_bet_lines(bets: List[Dict[str, Any]]) -> str:
     if not bets:
-        return "No qualifying EV bets found today."
-    lines: List[str] = ["Top EV Bets:"]
+        return ""
+    lines: List[str] = []
     for i, bet in enumerate(bets, start=1):
-        lines.append(
-            f"{i}. {bet.get('game','')} | {bet.get('market','')} | {bet.get('outcome','')}\n"
-            f"   Bovada: {bet.get('bovada_odds')}  Fair: {round(bet.get('fair_odds',0), 2)}  EV: {round(bet.get('edge_pct',0), 2)}%"
+        prefix = "⚠️ " if bet.get("fallback") else ""
+        suffix = " (Low EV fallback)" if bet.get("fallback") else ""
+        line = (
+            f"{prefix}{i}. {bet.get('game','')} | {bet.get('market','')} | {bet.get('outcome','')}\n"
+            f"   Bovada: {bet.get('bovada_odds')}  Fair: {round(bet.get('fair_odds',0), 2)}  EV: {round(bet.get('edge_pct',0), 2)}%{suffix}"
         )
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -91,8 +104,11 @@ def build_application(token: str, engine: EVEngine, results: ResultsTracker, ban
             
             # Try multiple sports
             all_games = []
-            sports = ["basketball_nba", "americanfootball_nfl", "baseball_mlb", "icehockey_nhl", 
-                     "soccer_epl", "soccer_uefa_champs_league"]
+            sports_csv = os.getenv(
+                "SPORTS",
+                "basketball_nba,americanfootball_nfl,baseball_mlb,soccer_epl,soccer_uefa_champs_league",
+            )
+            sports = [s.strip() for s in sports_csv.split(",") if s.strip()]
             
             for sport in sports:
                 try:
@@ -110,13 +126,16 @@ def build_application(token: str, engine: EVEngine, results: ResultsTracker, ban
                 await update.message.reply_text("❌ No games found across all sports. Try again later.")
                 return
                 
-            top_bets = engine.get_top_bets(all_games, n=5, min_edge=0.005)  # Lower threshold: 0.5%
+            min_edge = float(os.getenv("MIN_EDGE", "0.1"))
+            top_n = int(os.getenv("TOP_BETS", "3"))
+            top_bets = engine.get_top_bets(all_games, n=top_n, min_edge=min_edge)
             
             if not top_bets:
                 await update.message.reply_text("❌ No EV opportunities found above 0.5% edge. Try again later.")
                 return
                 
-            message = "🧪 TEST EV OPPORTUNITIES (All Sports):\n\n" + format_bets_message(top_bets)
+            header = f"🧪 TEST EV OPPORTUNITIES (All Sports) — Top {top_n} (MIN_EDGE {min_edge*100:.1f}%)"
+            message = header + "\n\n" + format_bet_lines(top_bets)
             await update.message.reply_text(message)
             
         except Exception as e:
@@ -128,8 +147,11 @@ def build_application(token: str, engine: EVEngine, results: ResultsTracker, ban
         try:
             # Test API connection with all sports
             all_games = []
-            sports = ["basketball_nba", "americanfootball_nfl", "baseball_mlb", "icehockey_nhl", 
-                     "soccer_epl", "soccer_uefa_champs_league"]
+            sports_csv = os.getenv(
+                "SPORTS",
+                "basketball_nba,americanfootball_nfl,baseball_mlb,soccer_epl,soccer_uefa_champs_league",
+            )
+            sports = [s.strip() for s in sports_csv.split(",") if s.strip()]
             
             sport_counts = {}
             for sport in sports:
@@ -241,10 +263,17 @@ def main() -> None:
     # Daily job: fetch odds, compute top 3 bets, send to Telegram (if chat id configured)
     async def daily_job(app: Application) -> None:
         try:
+            # Read config
+            min_edge = float(os.getenv("MIN_EDGE", "0.1"))
+            top_n = int(os.getenv("TOP_BETS", "3"))
+            sports_csv = os.getenv(
+                "SPORTS",
+                "basketball_nba,americanfootball_nfl,baseball_mlb,soccer_epl,soccer_uefa_champs_league",
+            )
+            sports = [s.strip() for s in sports_csv.split(",") if s.strip()]
+
             # Fetch from all sports
             all_games = []
-            sports = ["basketball_nba", "americanfootball_nfl", "baseball_mlb", "icehockey_nhl", 
-                     "soccer_epl", "soccer_uefa_champs_league", "tennis_atp"]
             
             for sport in sports:
                 try:
@@ -277,12 +306,23 @@ def main() -> None:
 
             todays_games = [g for g in all_games if is_today(g)]
 
-            top_bets = engine.get_top_bets(todays_games, n=3, min_edge=0.02)
-            message = "🌅 DAILY EV REPORT (All Sports):\n\n" + format_bets_message(top_bets)
+            top_bets = engine.get_top_bets(todays_games, n=top_n, min_edge=min_edge)
+
+            if not top_bets:
+                msg = "No odds available from provider right now. Try again later."
+            else:
+                header = f"🏆 Top {top_n} Bovada Picks (MIN_EDGE {min_edge*100:.1f}%)"
+                bets_txt = format_bet_lines(top_bets)
+                # Append bankroll summary line
+                summary = bankroll.get_summary()
+                bank_txt = (
+                    f"\n\nBankroll — Start: {summary['starting']:.2f}  Current: {summary['current']:.2f}  ROI: {summary['roi_pct']:.2f}%"
+                )
+                msg = header + "\n\n" + bets_txt + bank_txt
 
             chat_id = os.getenv("TELEGRAM_CHAT_ID")
             if chat_id:
-                await app.bot.send_message(chat_id=chat_id, text=message)
+                await app.bot.send_message(chat_id=chat_id, text=msg)
             logger.info(f"Daily report sent: {len(top_bets)} opportunities found")
         except Exception as e:
             logger.error(f"Daily job failed: {e}")

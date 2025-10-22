@@ -147,7 +147,7 @@ class EVEngine:
         return ev
 
     def get_top_bets(self, games_data: List[Dict[str, Any]], n: int = 10, min_edge: float = 0.02) -> List[Dict[str, Any]]:
-        """Return sorted list of top n bets above min_edge.
+        """Return list of top bets using selection with fallback logic.
         
         Args:
             games_data: List of game dictionaries from fetch_odds().
@@ -157,7 +157,7 @@ class EVEngine:
         Returns:
             List of bet dictionaries sorted by EV (highest first).
         """
-        top_bets = []
+        candidates: List[Dict[str, Any]] = []
         
         for game in games_data:
             fair_lines = self.calc_fair_line(game)
@@ -186,22 +186,22 @@ class EVEngine:
                             continue
                             
                         ev = self.calc_ev(bovada_odds, fair_odds)
-                        
-                        if ev >= min_edge:
-                            bet_info = {
-                                "game": game.get("home_team", "") + " vs " + game.get("away_team", ""),
-                                "market": market_type,
-                                "outcome": outcome.get("description", ""),
-                                "bovada_odds": bovada_odds,
-                                "fair_odds": fair_odds,
-                                "ev": ev,
-                                "edge_pct": ev * 100
-                            }
-                            top_bets.append(bet_info)
-        
-        # Sort by EV (highest first) and return top n
-        top_bets.sort(key=lambda x: x["ev"], reverse=True)
-        return top_bets[:n]
+
+                        bet_info = {
+                            "game": game.get("home_team", "") + " vs " + game.get("away_team", ""),
+                            "market": market_type,
+                            "outcome": outcome.get("description", ""),
+                            "bovada_odds": bovada_odds,
+                            "fair_odds": fair_odds,
+                            "ev": ev,
+                            "edge_pct": ev * 100,
+                            "desc": f"{market_type} | {outcome.get('description', '')}",
+                        }
+                        candidates.append(bet_info)
+
+        # Select final list with fallback logic
+        selected = select_top_bets(candidates, min_edge=min_edge, top_n=n)
+        return selected
 
     def _american_to_prob(self, odds: float) -> float:
         """Convert American odds to probability."""
@@ -217,4 +217,39 @@ class EVEngine:
         else:
             return (100 / prob) - 100
 
+
+def select_top_bets(results: List[Dict[str, Any]], min_edge: float, top_n: int) -> List[Dict[str, Any]]:
+    """
+    results: list[dict] with at least keys {"ev": float, "desc": str, ...}
+    Returns: list[dict] of length <= top_n.
+    If >= top_n with ev >= min_edge -> return the best top_n.
+    Else -> take all >= min_edge, then fill the rest with the next-best EVs.
+    Mark any item with ev < min_edge as a fallback by setting item["fallback"] = True.
+    Ensure the final list is sorted by ev DESC.
+    """
+    if not results:
+        return []
+
+    positive = [r for r in results if r.get("ev", 0) >= min_edge]
+    positive.sort(key=lambda x: x["ev"], reverse=True)
+    if len(positive) >= top_n:
+        return positive[:top_n]
+
+    all_sorted = sorted(results, key=lambda x: x.get("ev", 0), reverse=True)
+    out: List[Dict[str, Any]] = positive[:]
+    for r in all_sorted:
+        if len(out) >= top_n:
+            break
+        if r not in out:
+            if r.get("ev", 0) < min_edge:
+                r = {**r, "fallback": True}
+            out.append(r)
+
+    try:
+        print(f"Fallback used: only {len(positive)} >= MIN_EDGE={min_edge}")
+    except Exception:
+        pass
+
+    out.sort(key=lambda x: x.get("ev", 0), reverse=True)
+    return out
 
