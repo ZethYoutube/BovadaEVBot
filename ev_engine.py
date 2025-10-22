@@ -50,7 +50,9 @@ class EVEngine:
             "apiKey": self.api_key,
             "regions": "us",
             "markets": markets,
-            "oddsFormat": "american"
+            "oddsFormat": "american",
+            "dateFormat": "iso",
+            "daysFrom": 1,
         }
         
         try:

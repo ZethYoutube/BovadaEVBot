@@ -256,7 +256,28 @@ def main() -> None:
                     logger.warning(f"Daily job: Failed to fetch {sport}: {e}")
                     continue
             
-            top_bets = engine.get_top_bets(all_games, n=3, min_edge=0.02)
+            # Filter to same calendar day in configured timezone (default: US Eastern)
+            from datetime import datetime
+            import pytz
+
+            tz_name = os.getenv("LOCAL_TZ", "US/Eastern")
+            tz = pytz.timezone(tz_name)
+            today = datetime.now(tz).date()
+
+            def is_today(game: Dict[str, Any]) -> bool:
+                ts = game.get("commence_time")
+                if not ts:
+                    return False
+                try:
+                    # ISO format from API
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    return dt.astimezone(tz).date() == today
+                except Exception:
+                    return False
+
+            todays_games = [g for g in all_games if is_today(g)]
+
+            top_bets = engine.get_top_bets(todays_games, n=3, min_edge=0.02)
             message = "🌅 DAILY EV REPORT (All Sports):\n\n" + format_bets_message(top_bets)
 
             chat_id = os.getenv("TELEGRAM_CHAT_ID")
@@ -269,7 +290,7 @@ def main() -> None:
     app = build_application(telegram_token, engine, results, bankroll)
 
     # Schedule job daily
-    schedule.every().day.at(os.getenv("DAILY_TIME", "09:00")).do(lambda: asyncio.run(daily_job(app)))
+    schedule.every().day.at(os.getenv("DAILY_TIME", "05:00")).do(lambda: asyncio.run(daily_job(app)))
 
     # Start schedule loop in background
     threading.Thread(target=schedule_loop, daemon=True).start()
