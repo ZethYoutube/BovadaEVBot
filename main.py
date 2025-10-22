@@ -131,7 +131,8 @@ def build_application(token: str, engine: EVEngine, results: ResultsTracker, ban
             top_bets = engine.get_top_bets(all_games, n=top_n, min_edge=min_edge)
             
             if not top_bets:
-                await update.message.reply_text("❌ No EV opportunities found above 0.5% edge. Try again later.")
+                # With fallback logic, still can be empty if no odds parsed
+                await update.message.reply_text("❌ No EV opportunities found. Try again later.")
                 return
                 
             header = f"🧪 TEST EV OPPORTUNITIES (All Sports) — Top {top_n} (MIN_EDGE {min_edge*100:.1f}%)"

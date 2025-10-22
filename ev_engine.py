@@ -164,7 +164,9 @@ class EVEngine:
             
             # Check Bovada odds against fair lines
             for bookmaker in game.get("bookmakers", []):
-                if bookmaker.get("title", "").lower() != "bovada":
+                name = bookmaker.get("title", "").lower()
+                # Accept Bovada and regional brand alias Bodog
+                if not any(alias in name for alias in ("bovada", "bodog")):
                     continue
                     
                 for market_type in ["h2h", "spreads", "totals"]:
