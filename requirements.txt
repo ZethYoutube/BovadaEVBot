@@ -1,0 +1,10 @@
+# Core dependencies for BovadaEVBot
+python-dotenv>=1.0.1
+requests>=2.32.3
+pandas>=2.0.0
+schedule>=1.2.0
+
+# Telegram bot library
+python-telegram-bot>=21.4
+
+
