@@ -84,13 +84,30 @@ def build_application(token: str, engine: EVEngine, results: ResultsTracker, ban
         }
         await update.message.reply_text("Settings:\n" + json.dumps(settings, indent=2))
 
+    async def cmd_test_ev(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Test EV calculation with current odds."""
+        try:
+            games = engine.fetch_odds()
+            top_bets = engine.get_top_bets(games, n=5, min_edge=0.01)  # Lower threshold for testing
+            
+            if not top_bets:
+                await update.message.reply_text("No EV opportunities found. Try again later when games are available.")
+                return
+                
+            message = "🧪 TEST EV OPPORTUNITIES:\n\n" + format_bets_message(top_bets)
+            await update.message.reply_text(message)
+            
+        except Exception as e:
+            await update.message.reply_text(f"Test failed: {str(e)}")
+
     async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await update.message.reply_text("BovadaEVBot is running. Use /bankroll, /stats, /settings")
+        await update.message.reply_text("BovadaEVBot is running. Use /bankroll, /stats, /settings, /testev")
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("bankroll", cmd_bankroll))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("settings", cmd_settings))
+    app.add_handler(CommandHandler("testev", cmd_test_ev))
 
     return app
 
@@ -109,7 +126,7 @@ def main() -> None:
     # Initialize core components
     engine = EVEngine(api_key=odds_api_key)
     bovada_filter = BovadaFilter()
-    bankroll = BankrollManager(starting_bankroll=float(os.getenv("STARTING_BANKROLL", "1000") or 1000))
+    bankroll = BankrollManager(starting_bankroll=float(os.getenv("STARTING_BANKROLL", "20") or 20))
     results = ResultsTracker()
 
     # Daily job: fetch odds, compute top 3 bets, send to Telegram (if chat id configured)
