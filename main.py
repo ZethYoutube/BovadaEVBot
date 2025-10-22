@@ -137,6 +137,21 @@ def main() -> None:
     threading.Thread(target=schedule_loop, daemon=True).start()
 
     # Run Telegram bot (blocking)
+    port = int(os.getenv("PORT", 8000))
+    
+    # Start HTTP server for Render health checks
+    import http.server
+    import socketserver
+    
+    def start_http_server():
+        handler = http.server.SimpleHTTPRequestHandler
+        with socketserver.TCPServer(("", port), handler) as httpd:
+            httpd.serve_forever()
+    
+    # Start HTTP server in background
+    threading.Thread(target=start_http_server, daemon=True).start()
+    
+    # Run Telegram bot
     app.run_polling(close_loop=False)
 
 
