@@ -76,17 +76,13 @@ class EVEngine:
     def calc_fair_line(self, game_data: Dict[str, Any]) -> Dict[str, Any]:
         """Calculate fair probabilities from all books.
         
-        Args:
-            game_data: Game dictionary with bookmaker odds.
-            
-        Returns:
-            Dictionary with fair lines for each market type.
+        This uses TheOddsAPI markets schema: bookmakers[].markets[].key/outcomes[].
         """
-        fair_lines = {}
-        
+        fair_lines: Dict[str, Dict[str, float]] = {}
+
         for market_type in ["h2h", "spreads", "totals"]:
-            # Collect all odds for this market from bookmakers[].markets[].outcomes[]
-            all_odds: List[float] = []
+            # Collect prices for this market across all bookmakers
+            all_prices: List[float] = []
             for bookmaker in game_data.get("bookmakers", []):
                 for market in bookmaker.get("markets", []):
                     if market.get("key") != market_type:
@@ -94,28 +90,23 @@ class EVEngine:
                     for outcome in market.get("outcomes", []):
                         price = outcome.get("price")
                         if isinstance(price, (int, float)):
-                            all_odds.append(float(price))
-            
-            if not all_odds:
+                            all_prices.append(float(price))
+
+            if not all_prices:
                 continue
-                
-            # Calculate fair line (average of all odds)
+
             if market_type == "h2h":
-                # For moneyline, average the implied probabilities
-                probs = [self._american_to_prob(odds) for odds in all_odds if odds != 0]
+                probs = [self._american_to_prob(p) for p in all_prices if p != 0]
                 if probs:
                     fair_prob = sum(probs) / len(probs)
                     fair_lines[market_type] = {
                         "fair_prob": fair_prob,
-                        "fair_odds": self._prob_to_american(fair_prob)
+                        "fair_odds": self._prob_to_american(fair_prob),
                     }
             else:
-                # For spreads/totals, average the odds directly
-                valid_odds = [odds for odds in all_odds if odds != 0]
-                if valid_odds:
-                    fair_odds = sum(valid_odds) / len(valid_odds)
-                    fair_lines[market_type] = {"fair_odds": fair_odds}
-        
+                fair_odds = sum(all_prices) / len(all_prices)
+                fair_lines[market_type] = {"fair_odds": fair_odds}
+
         return fair_lines
 
     def calc_ev(self, bovada_odds: float, fair_odds: float) -> float:
@@ -159,38 +150,38 @@ class EVEngine:
         for game in games_data:
             fair_lines = self.calc_fair_line(game)
             
-            # Check Bovada/Bodog odds against fair lines using markets schema
+            # Check Bovada/Bodog odds against fair lines using markets[]
             for bookmaker in game.get("bookmakers", []):
                 name = bookmaker.get("title", "").lower()
                 if not any(alias in name for alias in ("bovada", "bodog")):
                     continue
-
+                    
                 for market in bookmaker.get("markets", []):
                     mkey = market.get("key")
                     if mkey not in ["h2h", "spreads", "totals"]:
                         continue
                     if mkey not in fair_lines:
                         continue
-
+                    
                     for outcome in market.get("outcomes", []):
-                        bovada_odds = outcome.get("price", 0)
-                        if not isinstance(bovada_odds, (int, float)) or bovada_odds == 0:
+                        price = outcome.get("price")
+                        if not isinstance(price, (int, float)) or price == 0:
+                            continue
+                        fair_odds_val = fair_lines[mkey].get("fair_odds", 0)
+                        if not isinstance(fair_odds_val, (int, float)) or fair_odds_val == 0:
                             continue
 
-                        fair_data = fair_lines[mkey]
-                        fair_odds = fair_data.get("fair_odds", 0)
-                        if not isinstance(fair_odds, (int, float)) or fair_odds == 0:
-                            continue
-
-                        ev = self.calc_ev(float(bovada_odds), float(fair_odds))
+                        bovada_odds = float(price)
+                        fair_odds = float(fair_odds_val)
+                        ev = self.calc_ev(bovada_odds, fair_odds)
 
                         outcome_name = outcome.get("name") or outcome.get("description", "")
                         bet_info = {
                             "game": game.get("home_team", "") + " vs " + game.get("away_team", ""),
                             "market": mkey,
                             "outcome": outcome_name,
-                            "bovada_odds": float(bovada_odds),
-                            "fair_odds": float(fair_odds),
+                            "bovada_odds": bovada_odds,
+                            "fair_odds": fair_odds,
                             "ev": ev,
                             "edge_pct": ev * 100,
                             "desc": f"{mkey} | {outcome_name}",
