@@ -33,6 +33,7 @@ import schedule
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes
+from telegram import error as tg_error
 
 from bovada_filter import BovadaFilter
 from ev_engine import EVEngine
@@ -364,14 +365,37 @@ def main() -> None:
     
     threading.Thread(target=keep_alive, daemon=True).start()
     
+    # Preflight: ensure single polling instance (exit if another instance is polling)
+    async def _preflight_check() -> bool:
+        try:
+            # A quick get_updates will raise Conflict if another instance is polling
+            await app.bot.get_updates(limit=1, timeout=1)
+            return True
+        except tg_error.Conflict:
+            logger.error("Another bot instance is already polling. Exiting to avoid conflicts.")
+            return False
+        except Exception:
+            # Non-conflict errors should not prevent startup
+            return True
+
+    if not asyncio.run(_preflight_check()):
+        return
+
     # Run Telegram bot with error handling
     try:
-        app.run_polling(close_loop=False)
+        app.run_polling(drop_pending_updates=True, close_loop=False)
+    except tg_error.Conflict:
+        logger.error("Polling conflict detected at runtime. Exiting instance.")
+        return
     except Exception as e:
         logger.error(f"Bot error: {e}")
-        # Restart after 30 seconds
-        time.sleep(30)
-        app.run_polling(close_loop=False)
+        # Brief backoff then try once more
+        time.sleep(5)
+        try:
+            app.run_polling(drop_pending_updates=True, close_loop=False)
+        except tg_error.Conflict:
+            logger.error("Polling conflict persists. Exiting instance.")
+            return
 
 
 if __name__ == "__main__":
