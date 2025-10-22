@@ -159,54 +159,52 @@ def build_application(token: str, engine: EVEngine, results: ResultsTracker, ban
     async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Debug command to see what games and bookmakers are available."""
         try:
-            # Fetch from all sports
-            all_games = []
-            sports = ["basketball_nba", "americanfootball_nfl", "baseball_mlb", "icehockey_nhl", 
-                     "soccer_epl", "soccer_uefa_champs_league", "tennis_atp"]
+            await update.message.reply_text("🔍 Fetching debug info...")
             
-            sport_counts = {}
-            bovada_counts = {}
-            all_bookmakers = set()
+            # Just test NBA first (fastest)
+            games = engine.fetch_odds(sport="basketball_nba")
             
-            for sport in sports:
-                try:
-                    games = engine.fetch_odds(sport=sport)
-                    if games:
-                        all_games.extend(games)
-                        sport_counts[sport] = len(games)
-                        
-                        # Count Bovada and collect bookmakers
-                        bovada_count = 0
-                        for game in games:
-                            for bookmaker in game.get('bookmakers', []):
-                                bookmaker_name = bookmaker.get('title', '').lower()
-                                all_bookmakers.add(bookmaker_name)
-                                if 'bovada' in bookmaker_name:
-                                    bovada_count += 1
-                        bovada_counts[sport] = bovada_count
-                except Exception as e:
-                    sport_counts[sport] = 0
-                    bovada_counts[sport] = 0
+            if not games:
+                await update.message.reply_text("❌ No NBA games found.")
+                return
             
-            debug_msg = f"🔍 DEBUG INFO:\n"
-            debug_msg += f"📊 Total Games: {len(all_games)}\n\n"
-            debug_msg += f"🏆 Sports Breakdown:\n"
+            debug_msg = f"🔍 DEBUG INFO (NBA Only):\n"
+            debug_msg += f"📊 NBA Games: {len(games)}\n\n"
             
-            for sport, count in sport_counts.items():
-                sport_name = sport.replace('_', ' ').title()
-                bovada_count = bovada_counts.get(sport, 0)
-                debug_msg += f"  {sport_name}: {count} games, {bovada_count} with Bovada\n"
-            
-            debug_msg += f"\n📚 Available Bookmakers:\n"
-            for bookmaker in sorted(all_bookmakers)[:10]:  # Show first 10
-                debug_msg += f"  • {bookmaker}\n"
-            
-            if len(all_bookmakers) > 10:
-                debug_msg += f"  ... and {len(all_bookmakers) - 10} more\n"
+            # Show first game details
+            if games:
+                game = games[0]
+                debug_msg += f"📋 Sample Game:\n"
+                debug_msg += f"  Home: {game.get('home_team', 'Unknown')}\n"
+                debug_msg += f"  Away: {game.get('away_team', 'Unknown')}\n"
+                debug_msg += f"  Bookmakers: {len(game.get('bookmakers', []))}\n\n"
+                
+                # Show all bookmakers
+                debug_msg += f"📚 Available Bookmakers:\n"
+                bookmakers = []
+                bovada_found = False
+                
+                for bookmaker in game.get('bookmakers', []):
+                    bookmaker_name = bookmaker.get('title', '')
+                    bookmakers.append(bookmaker_name)
+                    if 'bovada' in bookmaker_name.lower():
+                        bovada_found = True
+                
+                for bm in bookmakers[:8]:  # Show first 8
+                    debug_msg += f"  • {bm}\n"
+                
+                if len(bookmakers) > 8:
+                    debug_msg += f"  ... and {len(bookmakers) - 8} more\n"
+                
+                debug_msg += f"\n🎯 Bovada Found: {'✅' if bovada_found else '❌'}\n"
+                
+                if not bovada_found:
+                    debug_msg += f"\n💡 Try searching for 'bodog' or other variations"
             
             await update.message.reply_text(debug_msg)
             
         except Exception as e:
+            logger.error(f"Debug command failed: {e}")
             await update.message.reply_text(f"❌ Debug failed: {str(e)}")
 
     async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
