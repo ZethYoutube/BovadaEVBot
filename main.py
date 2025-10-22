@@ -87,22 +87,36 @@ def build_application(token: str, engine: EVEngine, results: ResultsTracker, ban
     async def cmd_test_ev(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Test EV calculation with current odds."""
         try:
-            await update.message.reply_text("🔍 Fetching odds...")
+            await update.message.reply_text("🔍 Fetching odds from all sports...")
             
-            games = engine.fetch_odds()
-            logger.info(f"Fetched {len(games)} games for testing")
+            # Try multiple sports
+            all_games = []
+            sports = ["basketball_nba", "americanfootball_nfl", "baseball_mlb", "icehockey_nhl", 
+                     "soccer_epl", "soccer_uefa_champs_league", "tennis_atp"]
             
-            if not games:
-                await update.message.reply_text("❌ No games found. Try again later when NBA games are available.")
+            for sport in sports:
+                try:
+                    games = engine.fetch_odds(sport=sport)
+                    if games:
+                        all_games.extend(games)
+                        logger.info(f"Fetched {len(games)} games from {sport}")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch {sport}: {e}")
+                    continue
+            
+            logger.info(f"Total games fetched: {len(all_games)}")
+            
+            if not all_games:
+                await update.message.reply_text("❌ No games found across all sports. Try again later.")
                 return
                 
-            top_bets = engine.get_top_bets(games, n=5, min_edge=0.01)  # Lower threshold for testing
+            top_bets = engine.get_top_bets(all_games, n=5, min_edge=0.005)  # Lower threshold: 0.5%
             
             if not top_bets:
-                await update.message.reply_text("❌ No EV opportunities found above 1% edge. Try again later.")
+                await update.message.reply_text("❌ No EV opportunities found above 0.5% edge. Try again later.")
                 return
                 
-            message = "🧪 TEST EV OPPORTUNITIES:\n\n" + format_bets_message(top_bets)
+            message = "🧪 TEST EV OPPORTUNITIES (All Sports):\n\n" + format_bets_message(top_bets)
             await update.message.reply_text(message)
             
         except Exception as e:
@@ -112,20 +126,70 @@ def build_application(token: str, engine: EVEngine, results: ResultsTracker, ban
     async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Check bot status and basic info."""
         try:
-            # Test API connection
-            games = engine.fetch_odds()
+            # Test API connection with all sports
+            all_games = []
+            sports = ["basketball_nba", "americanfootball_nfl", "baseball_mlb", "icehockey_nhl", 
+                     "soccer_epl", "soccer_uefa_champs_league", "tennis_atp"]
+            
+            sport_counts = {}
+            for sport in sports:
+                try:
+                    games = engine.fetch_odds(sport=sport)
+                    if games:
+                        all_games.extend(games)
+                        sport_counts[sport] = len(games)
+                except Exception as e:
+                    sport_counts[sport] = 0
+            
             status_msg = f"✅ Bot Status: Running\n"
-            status_msg += f"📊 Games Available: {len(games)}\n"
+            status_msg += f"📊 Total Games: {len(all_games)}\n"
             status_msg += f"💰 Bankroll: ${bankroll.current_bankroll:.2f}\n"
             status_msg += f"🎯 Starting Bankroll: ${bankroll.starting_bankroll:.2f}\n"
-            status_msg += f"📈 ROI: {bankroll.get_summary()['roi_pct']:.2f}%"
+            status_msg += f"📈 ROI: {bankroll.get_summary()['roi_pct']:.2f}%\n\n"
+            status_msg += f"🏆 Sports Coverage:\n"
+            
+            for sport, count in sport_counts.items():
+                sport_name = sport.replace('_', ' ').title()
+                status_msg += f"  {sport_name}: {count} games\n"
             
             await update.message.reply_text(status_msg)
         except Exception as e:
             await update.message.reply_text(f"❌ Status check failed: {str(e)}")
 
+    async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Debug command to see what games are available."""
+        try:
+            games = engine.fetch_odds()
+            
+            if not games:
+                await update.message.reply_text("❌ No games found in API response.")
+                return
+                
+            debug_msg = f"🔍 DEBUG INFO:\n"
+            debug_msg += f"📊 Total Games: {len(games)}\n\n"
+            
+            # Show first few games
+            for i, game in enumerate(games[:3]):
+                debug_msg += f"Game {i+1}:\n"
+                debug_msg += f"  Home: {game.get('home_team', 'Unknown')}\n"
+                debug_msg += f"  Away: {game.get('away_team', 'Unknown')}\n"
+                debug_msg += f"  Bookmakers: {len(game.get('bookmakers', []))}\n"
+                
+                # Check for Bovada
+                bovada_found = False
+                for bookmaker in game.get('bookmakers', []):
+                    if 'bovada' in bookmaker.get('title', '').lower():
+                        bovada_found = True
+                        break
+                debug_msg += f"  Bovada: {'✅' if bovada_found else '❌'}\n\n"
+            
+            await update.message.reply_text(debug_msg)
+            
+        except Exception as e:
+            await update.message.reply_text(f"❌ Debug failed: {str(e)}")
+
     async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await update.message.reply_text("BovadaEVBot is running. Use /bankroll, /stats, /settings, /testev, /status")
+        await update.message.reply_text("BovadaEVBot is running. Use /bankroll, /stats, /settings, /testev, /status, /debug")
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("bankroll", cmd_bankroll))
@@ -133,6 +197,7 @@ def build_application(token: str, engine: EVEngine, results: ResultsTracker, ban
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("testev", cmd_test_ev))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("debug", cmd_debug))
 
     return app
 
@@ -157,16 +222,28 @@ def main() -> None:
     # Daily job: fetch odds, compute top 3 bets, send to Telegram (if chat id configured)
     async def daily_job(app: Application) -> None:
         try:
-            games = engine.fetch_odds()
-            # Optional: use filter if needed in future; current EV uses raw games
-            # filtered = bovada_filter.filter_markets(games)
-            top_bets = engine.get_top_bets(games, n=3, min_edge=0.02)
-            message = format_bets_message(top_bets)
+            # Fetch from all sports
+            all_games = []
+            sports = ["basketball_nba", "americanfootball_nfl", "baseball_mlb", "icehockey_nhl", 
+                     "soccer_epl", "soccer_uefa_champs_league", "tennis_atp"]
+            
+            for sport in sports:
+                try:
+                    games = engine.fetch_odds(sport=sport)
+                    if games:
+                        all_games.extend(games)
+                        logger.info(f"Daily job: Fetched {len(games)} games from {sport}")
+                except Exception as e:
+                    logger.warning(f"Daily job: Failed to fetch {sport}: {e}")
+                    continue
+            
+            top_bets = engine.get_top_bets(all_games, n=3, min_edge=0.02)
+            message = "🌅 DAILY EV REPORT (All Sports):\n\n" + format_bets_message(top_bets)
 
             chat_id = os.getenv("TELEGRAM_CHAT_ID")
             if chat_id:
                 await app.bot.send_message(chat_id=chat_id, text=message)
-            logger.info(message)
+            logger.info(f"Daily report sent: {len(top_bets)} opportunities found")
         except Exception as e:
             logger.error(f"Daily job failed: {e}")
 
