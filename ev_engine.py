@@ -76,13 +76,39 @@ class EVEngine:
     def calc_fair_line(self, game_data: Dict[str, Any]) -> Dict[str, Any]:
         """Calculate fair probabilities from all books.
         
-        This uses TheOddsAPI markets schema: bookmakers[].markets[].key/outcomes[].
+        - For h2h: compute per-outcome fair probability by averaging implied probabilities
+          across all bookmakers for each outcome name.
+        - For spreads/totals: average the American odds directly across all outcomes.
         """
-        fair_lines: Dict[str, Dict[str, float]] = {}
+        fair_lines: Dict[str, Any] = {}
 
-        for market_type in ["h2h", "spreads", "totals"]:
-            # Collect prices for this market across all bookmakers
-            all_prices: List[float] = []
+        # Moneyline: per outcome fair probability
+        outcome_prob_accum: Dict[str, List[float]] = {}
+        for bookmaker in game_data.get("bookmakers", []):
+            for market in bookmaker.get("markets", []):
+                if market.get("key") != "h2h":
+                    continue
+                for outcome in market.get("outcomes", []):
+                    price = outcome.get("price")
+                    name = outcome.get("name") or outcome.get("description") or ""
+                    if isinstance(price, (int, float)) and name:
+                        prob = self._american_to_prob(float(price))
+                        outcome_prob_accum.setdefault(name, []).append(prob)
+        if outcome_prob_accum:
+            h2h_outcomes: Dict[str, Dict[str, float]] = {}
+            for name, probs in outcome_prob_accum.items():
+                if probs:
+                    fair_prob = sum(probs) / len(probs)
+                    h2h_outcomes[name] = {
+                        "fair_prob": fair_prob,
+                        "fair_odds": self._prob_to_american(fair_prob),
+                    }
+            if h2h_outcomes:
+                fair_lines["h2h"] = {"outcomes": h2h_outcomes}
+
+        # Spreads and Totals: average odds
+        for market_type in ["spreads", "totals"]:
+            prices: List[float] = []
             for bookmaker in game_data.get("bookmakers", []):
                 for market in bookmaker.get("markets", []):
                     if market.get("key") != market_type:
@@ -90,22 +116,9 @@ class EVEngine:
                     for outcome in market.get("outcomes", []):
                         price = outcome.get("price")
                         if isinstance(price, (int, float)):
-                            all_prices.append(float(price))
-
-            if not all_prices:
-                continue
-
-            if market_type == "h2h":
-                probs = [self._american_to_prob(p) for p in all_prices if p != 0]
-                if probs:
-                    fair_prob = sum(probs) / len(probs)
-                    fair_lines[market_type] = {
-                        "fair_prob": fair_prob,
-                        "fair_odds": self._prob_to_american(fair_prob),
-                    }
-            else:
-                fair_odds = sum(all_prices) / len(all_prices)
-                fair_lines[market_type] = {"fair_odds": fair_odds}
+                            prices.append(float(price))
+            if prices:
+                fair_lines[market_type] = {"fair_odds": sum(prices) / len(prices)}
 
         return fair_lines
 
@@ -126,7 +139,6 @@ class EVEngine:
         if fair_prob <= 0 or fair_prob >= 1:
             return 0.0
 
-        # Profit for $1 stake at American odds
         profit_per_unit = (bovada_odds / 100.0) if bovada_odds > 0 else (100.0 / abs(bovada_odds))
         ev = (fair_prob * profit_per_unit) - (1.0 - fair_prob)
         return ev
@@ -147,30 +159,36 @@ class EVEngine:
         for game in games_data:
             fair_lines = self.calc_fair_line(game)
             
-            # Check Bovada/Bodog odds against fair lines using markets[]
             for bookmaker in game.get("bookmakers", []):
                 name = bookmaker.get("title", "").lower()
                 if not any(alias in name for alias in ("bovada", "bodog")):
                     continue
-                    
                 for market in bookmaker.get("markets", []):
                     mkey = market.get("key")
                     if mkey not in ["h2h", "spreads", "totals"]:
                         continue
-                    if mkey not in fair_lines:
-                        continue
-                    
+
                     for outcome in market.get("outcomes", []):
                         price = outcome.get("price")
                         if not isinstance(price, (int, float)) or price == 0:
                             continue
-                        fair_odds_val = fair_lines[mkey].get("fair_odds", 0)
-                        if not isinstance(fair_odds_val, (int, float)) or fair_odds_val == 0:
+
+                        # Determine fair_odds for this specific outcome/market
+                        fair_odds_val: Optional[float] = None
+                        if mkey == "h2h":
+                            outcome_name = outcome.get("name") or outcome.get("description", "")
+                            per_outcomes = fair_lines.get("h2h", {}).get("outcomes", {})
+                            fair_info = per_outcomes.get(outcome_name)
+                            if fair_info:
+                                fair_odds_val = float(fair_info.get("fair_odds", 0))
+                        else:
+                            fair_odds_val = float(fair_lines.get(mkey, {}).get("fair_odds", 0))
+
+                        if not fair_odds_val:
                             continue
 
                         bovada_odds = float(price)
-                        fair_odds = float(fair_odds_val)
-                        ev = self.calc_ev(bovada_odds, fair_odds)
+                        ev = self.calc_ev(bovada_odds, fair_odds_val)
 
                         outcome_name = outcome.get("name") or outcome.get("description", "")
                         bet_info = {
@@ -178,14 +196,13 @@ class EVEngine:
                             "market": mkey,
                             "outcome": outcome_name,
                             "bovada_odds": bovada_odds,
-                            "fair_odds": fair_odds,
+                            "fair_odds": fair_odds_val,
                             "ev": ev,
                             "edge_pct": ev * 100,
                             "desc": f"{mkey} | {outcome_name}",
                         }
                         candidates.append(bet_info)
 
-        # Select final list with fallback logic
         selected = select_top_bets(candidates, min_edge=min_edge, top_n=n)
         return selected
 
