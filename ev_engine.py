@@ -76,29 +76,48 @@ class EVEngine:
     def calc_fair_line(self, game_data: Dict[str, Any]) -> Dict[str, Any]:
         """Calculate fair probabilities from all books.
         
-        - For h2h: compute per-outcome fair probability by averaging implied probabilities
-          across all bookmakers for each outcome name.
+        - For h2h: compute per-outcome fair probability by averaging per-book normalized
+          probabilities across all bookmakers for each outcome name (handles 2- and 3-way).
         - For spreads/totals: average the American odds directly across all outcomes.
         """
         fair_lines: Dict[str, Any] = {}
 
-        # Moneyline: per outcome fair probability
+        # Moneyline (h2h): per outcome fair probability with de-vig per bookmaker
         outcome_prob_accum: Dict[str, List[float]] = {}
         for bookmaker in game_data.get("bookmakers", []):
             for market in bookmaker.get("markets", []):
                 if market.get("key") != "h2h":
                     continue
+                # Collect implied probs for this bookmaker
+                book_probs: List[tuple[str, float]] = []
                 for outcome in market.get("outcomes", []):
                     price = outcome.get("price")
                     name = outcome.get("name") or outcome.get("description") or ""
                     if isinstance(price, (int, float)) and name:
                         prob = self._american_to_prob(float(price))
-                        outcome_prob_accum.setdefault(name, []).append(prob)
+                        if prob > 0:
+                            book_probs.append((name, prob))
+                if not book_probs:
+                    continue
+                # Normalize to remove this bookmaker's overround
+                total_prob = sum(p for _, p in book_probs)
+                if total_prob <= 0:
+                    continue
+                for name, p in book_probs:
+                    norm_p = p / total_prob
+                    outcome_prob_accum.setdefault(name, []).append(norm_p)
+
         if outcome_prob_accum:
+            # Average normalized probs across books
+            averaged: Dict[str, float] = {
+                name: (sum(probs) / len(probs)) for name, probs in outcome_prob_accum.items() if probs
+            }
+            # Renormalize the averaged probabilities to ensure they sum to 1.0
+            total_avg = sum(averaged.values())
             h2h_outcomes: Dict[str, Dict[str, float]] = {}
-            for name, probs in outcome_prob_accum.items():
-                if probs:
-                    fair_prob = sum(probs) / len(probs)
+            if total_avg > 0:
+                for name, p in averaged.items():
+                    fair_prob = p / total_avg
                     h2h_outcomes[name] = {
                         "fair_prob": fair_prob,
                         "fair_odds": self._prob_to_american(fair_prob),
