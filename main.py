@@ -87,27 +87,52 @@ def build_application(token: str, engine: EVEngine, results: ResultsTracker, ban
     async def cmd_test_ev(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Test EV calculation with current odds."""
         try:
+            await update.message.reply_text("🔍 Fetching odds...")
+            
             games = engine.fetch_odds()
+            logger.info(f"Fetched {len(games)} games for testing")
+            
+            if not games:
+                await update.message.reply_text("❌ No games found. Try again later when NBA games are available.")
+                return
+                
             top_bets = engine.get_top_bets(games, n=5, min_edge=0.01)  # Lower threshold for testing
             
             if not top_bets:
-                await update.message.reply_text("No EV opportunities found. Try again later when games are available.")
+                await update.message.reply_text("❌ No EV opportunities found above 1% edge. Try again later.")
                 return
                 
             message = "🧪 TEST EV OPPORTUNITIES:\n\n" + format_bets_message(top_bets)
             await update.message.reply_text(message)
             
         except Exception as e:
-            await update.message.reply_text(f"Test failed: {str(e)}")
+            logger.error(f"Test EV command failed: {e}")
+            await update.message.reply_text(f"❌ Test failed: {str(e)}")
+
+    async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Check bot status and basic info."""
+        try:
+            # Test API connection
+            games = engine.fetch_odds()
+            status_msg = f"✅ Bot Status: Running\n"
+            status_msg += f"📊 Games Available: {len(games)}\n"
+            status_msg += f"💰 Bankroll: ${bankroll.current_bankroll:.2f}\n"
+            status_msg += f"🎯 Starting Bankroll: ${bankroll.starting_bankroll:.2f}\n"
+            status_msg += f"📈 ROI: {bankroll.get_summary()['roi_pct']:.2f}%"
+            
+            await update.message.reply_text(status_msg)
+        except Exception as e:
+            await update.message.reply_text(f"❌ Status check failed: {str(e)}")
 
     async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await update.message.reply_text("BovadaEVBot is running. Use /bankroll, /stats, /settings, /testev")
+        await update.message.reply_text("BovadaEVBot is running. Use /bankroll, /stats, /settings, /testev, /status")
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("bankroll", cmd_bankroll))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("testev", cmd_test_ev))
+    app.add_handler(CommandHandler("status", cmd_status))
 
     return app
 
